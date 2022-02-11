@@ -1,0 +1,93 @@
+#!/bin/bash
+PATH="$PWD/node_modules/.bin":$PATH
+set -e
+
+compatibilty_check() {
+    set -x
+    rm -rf ./@generated && npm run prisma:g && npm run tscheck
+
+    # Enable noAtomicOperations
+    sed -i 's/noAtomicOperations = false/noAtomicOperations = true/g' prisma/schema.prisma
+    rm -rf ./@generated && npm run prisma:g && npm run tscheck
+    sed -i 's/noAtomicOperations = true/noAtomicOperations = false/g' prisma/schema.prisma
+
+    # Enable combineScalarFilters
+    sed -i 's/combineScalarFilters = false/combineScalarFilters = true/g' prisma/schema.prisma
+    rm -rf ./@generated && npm run prisma:g && npm run tscheck
+    sed -i 's/combineScalarFilters = true/combineScalarFilters = false/g' prisma/schema.prisma
+
+    # Switching reExport
+    sed -i 's/reExport = None/reExport = All/g' prisma/schema.prisma
+    rm -rf ./@generated && npm run prisma:g && npm run tscheck
+    sed -i 's/reExport = All/reExport = None/g' prisma/schema.prisma
+
+    # emitSingle and emitCompiled
+    sed -i 's/emitSingle = false/emitSingle = true/g' prisma/schema.prisma
+    rm -rf ./@generated && npm run prisma:g
+    npx tsc --noEmit --skipLibCheck --experimentalDecorators ./@generated/index.ts
+    npx ts-node ./@generated/index.ts
+
+    sed -i 's/emitCompiled = false/emitCompiled = true/g' prisma/schema.prisma
+    rm -rf ./@generated && npm run prisma:g
+    node ./@generated/index.js
+
+    sed -i 's/emitCompiled = true/emitCompiled = false/g' prisma/schema.prisma
+    sed -i 's/emitSingle = true/emitSingle = false/g' prisma/schema.prisma
+
+    # requireSingleFieldsInWhereUniqueInput
+    sed -i 's/requireSingleFieldsInWhereUniqueInput = false/requireSingleFieldsInWhereUniqueInput = true/g' prisma/schema.prisma
+    rm -rf ./@generated && npm run prisma:g && npm run tscheck
+    sed -i 's/requireSingleFieldsInWhereUniqueInput = true/requireSingleFieldsInWhereUniqueInput = false/g' prisma/schema.prisma
+
+    set +x
+}
+
+build() {
+    set -x
+    rm -rf dist
+    cp -rf src dist
+    cat tsconfig.json | jq 'del(.include, .compilerOptions.outDir)' >dist/tsconfig.json
+    cp -fv README.md LICENSE package.json dist
+    cd dist
+    /usr/bin/find . -name '*.spec.ts' | xargs rm -rf
+    rm -rf fixtures test example ./@generated
+    tsc -p .
+    rm -rf tsconfig.json
+    /usr/bin/find . -name '*.ts' | xargs rm -rf
+    cd ..
+    set +x
+}
+
+bundle() {
+    set -x
+    npx tsup src/index.ts --format cjs --target es2017
+    cp -fv README.md LICENSE package.json dist
+}
+
+git_last_release_tag() {
+    result=""
+    rev=$(git rev-list --max-count=1 --tags="v[0-9]*\\.[0-9]*\\.[0-9]*")
+    if [ -n "$rev" ]; then
+        result=$(git describe --tags $rev)
+    fi
+    if [ -n "$result" ]; then
+        result=$(git rev-list --max-parents=0 HEAD)
+    fi
+    echo $result
+}
+
+commit_lint() {
+    if git-branch-is -q -r "^(master)"; then
+        commitlint --edit
+    else
+        true
+    fi
+}
+
+commit_check() {
+    set -x
+    from=$(git_last_release_tag)
+    commitlint --from $from
+}
+
+"$@"
